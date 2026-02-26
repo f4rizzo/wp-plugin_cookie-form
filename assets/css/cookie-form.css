@@ -1,0 +1,103 @@
+.devmy-pdf-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 20px;
+    border-radius: 8px;
+    text-decoration: none;
+    background: #0b57d0;
+    color: #fff;
+    font-weight: 600;
+    line-height: 1;
+    transition: opacity 0.2s ease;
+}
+
+.devmy-pdf-download:hover {
+    opacity: 0.9;
+}
+
+.devmy-pdf-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: none;
+}
+
+.devmy-pdf-modal.is-open {
+    display: block;
+}
+
+.devmy-pdf-modal__overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.devmy-pdf-modal__panel {
+    position: relative;
+    width: min(92vw, 460px);
+    margin: 8vh auto;
+    background: #fff;
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.2);
+}
+
+.devmy-pdf-modal__close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    border: 0;
+    background: transparent;
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.devmy-pdf-form {
+    display: grid;
+    gap: 12px;
+}
+
+.devmy-pdf-form label {
+    display: grid;
+    gap: 6px;
+    font-size: 14px;
+}
+
+.devmy-pdf-form input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #c8ccd4;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.devmy-pdf-submit {
+    border: 0;
+    border-radius: 8px;
+    padding: 11px 16px;
+    font-weight: 600;
+    background: #0b57d0;
+    color: #fff;
+    cursor: pointer;
+}
+
+.devmy-pdf-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.devmy-pdf-message {
+    margin: 0;
+    min-height: 20px;
+    font-size: 14px;
+}
+
+.devmy-pdf-message.is-error {
+    color: #b42318;
+}
+
+.devmy-pdf-message.is-success {
+    color: #067647;
+}
