@@ -2,7 +2,7 @@
 /**
  * Plugin Name: cookie-form
  * Description: Blocca il primo download PDF con form (nome, email, azienda) e sblocca i successivi tramite cookie.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: DevMy
  * License: GPL2+
  */
@@ -69,14 +69,14 @@ final class Cookie_Form_PDF_Gate {
             'cookie-form-pdf-gate',
             $base_url . 'assets/css/cookie-form.css',
             array(),
-            '1.2.0'
+            '1.2.1'
         );
 
         wp_register_script(
             'cookie-form-pdf-gate',
             $base_url . 'assets/js/cookie-form.js',
             array( 'jquery' ),
-            '1.2.0',
+            '1.2.1',
             true
         );
     }
@@ -172,7 +172,7 @@ final class Cookie_Form_PDF_Gate {
                 <?php esc_html_e( 'Azienda', 'cookie-form' ); ?>
                 <input type="text" name="company" required />
             </label>
-            <button type="submit" class="devmy-pdf-submit"><?php esc_html_e( 'Invia e scarica', 'cookie-form' ); ?></button>
+            <button type="submit" class="devmy-pdf-submit"><?php esc_html_e( 'Invia e Scarica', 'cookie-form' ); ?></button>
             <p class="devmy-pdf-message" aria-live="polite"></p>
         </form>
         <?php

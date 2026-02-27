@@ -92,16 +92,75 @@
         return false;
     }
 
-    function closeElementorPopup(popupId) {
-        if (!popupId) {
-            return;
+    function closeElementorPopup(popupId, $form) {
+        var numericId = popupId ? parseInt(popupId, 10) : 0;
+        var $popup = numericId ? $('#elementor-popup-modal-' + numericId) : $form.closest('.elementor-popup-modal');
+
+        if (!$popup.length) {
+            $popup = $('[id^="elementor-popup-modal-"]:visible').first();
         }
 
+        // Close by emulating user action first (most stable across Elementor versions).
+        if ($popup.length) {
+            $popup.find('.dialog-close-button').first().trigger('click');
+            $popup.find('.dialog-widget-overlay').first().trigger('click');
+        }
+
+        if (window.jQuery) {
+            if (numericId) {
+                $(document).trigger('elementor/popup/hide', [numericId]);
+            } else {
+                $(document).trigger('elementor/popup/hide');
+            }
+        }
+
+        // Optional API close wrapped in try/catch: some Elementor versions throw on this call.
         if (window.elementorProFrontend && elementorProFrontend.modules && elementorProFrontend.modules.popup) {
-            elementorProFrontend.modules.popup.closePopup({ id: popupId });
-            return;
+            try {
+                if (numericId) {
+                    elementorProFrontend.modules.popup.closePopup({ id: numericId });
+                } else {
+                    elementorProFrontend.modules.popup.closePopup();
+                }
+            } catch (error) {
+                // Ignore and rely on DOM fallbacks below.
+            }
         }
 
+        if ($popup && $popup.length) {
+            // Last-resort fallback when Elementor close hooks are blocked.
+            $popup.removeClass('elementor-active').hide().attr('aria-hidden', 'true');
+            $('body, html')
+                .removeClass('dialog-prevent-scroll elementor-popup-modal-open')
+                .css('overflow', '');
+        }
+    }
+
+    function closeVisibleElementorPopups() {
+        var $visiblePopups = $('[id^="elementor-popup-modal-"]:visible, .elementor-popup-modal:visible, .dialog-widget:visible');
+
+        $visiblePopups.each(function () {
+            var $popup = $(this);
+            $popup.find('.dialog-close-button').first().trigger('click');
+            $popup.find('.dialog-widget-overlay').first().trigger('click');
+            $popup.hide().attr('aria-hidden', 'true');
+        });
+
+        $('.dialog-widget-overlay:visible').hide();
+        $('body, html')
+            .removeClass('dialog-prevent-scroll elementor-popup-modal-open')
+            .css('overflow', '');
+    }
+
+    function detectPopupIdFromForm($form) {
+        var popupId = '';
+        var modalId = $form.closest('.elementor-popup-modal').attr('id') || '';
+        var match = modalId.match(/(\d+)$/);
+        if (match && match[1]) {
+            popupId = match[1];
+        }
+
+        return popupId;
     }
 
     function setRequestedPdf(pdfUrl) {
@@ -129,11 +188,13 @@
         });
     }
 
-    $(document).on('click', '.devmy-pdf-download', function (event) {
-        var $button = $(this);
-        var pdfUrl = readData($button, 'pdf-url') || $button.attr('href');
-        var target = readData($button, 'target') || '_blank';
-        var popupId = readData($button, 'popup-id');
+    $(document).on('click', '.devmy-pdf-download, .devmy-pdf-download a, a.devmy-pdf-download', function (event) {
+        var $clicked = $(this);
+        var $container = $clicked.hasClass('devmy-pdf-download') ? $clicked : $clicked.closest('.devmy-pdf-download');
+        var $link = $clicked.is('a') ? $clicked : $container.find('a').first();
+        var pdfUrl = readData($container, 'pdf-url') || readData($link, 'pdf-url') || $link.attr('href') || $container.attr('href');
+        var target = readData($container, 'target') || readData($link, 'target') || $link.attr('target') || '_blank';
+        var popupId = readData($container, 'popup-id') || readData($link, 'popup-id');
 
         if (hasUnlockedAccess()) {
             return;
@@ -188,20 +249,16 @@
                 }
 
                 setUnlockedAccess();
-                setMessage($form, config.successText || 'Download sbloccato.', false);
-
-                setTimeout(function () {
-                    closeModal();
-                    if (pendingDownload && pendingDownload.popupId) {
-                        closeElementorPopup(pendingDownload.popupId);
-                    }
-                    $form[0].reset();
-                    if (pendingDownload && pendingDownload.url) {
-                        triggerDownload(pendingDownload.url, pendingDownload.target);
-                    }
-                    pendingDownload = null;
-                    setMessage($form, '', false);
-                }, 350);
+                closeModal();
+                closeElementorPopup((pendingDownload && pendingDownload.popupId) || detectPopupIdFromForm($form), $form);
+                closeVisibleElementorPopups();
+                setTimeout(closeVisibleElementorPopups, 150);
+                $form[0].reset();
+                if (pendingDownload && pendingDownload.url) {
+                    triggerDownload(pendingDownload.url, pendingDownload.target);
+                }
+                pendingDownload = null;
+                setMessage($form, '', false);
             })
             .fail(function () {
                 setMessage($form, config.errorText || 'Errore durante l\'invio.', true);

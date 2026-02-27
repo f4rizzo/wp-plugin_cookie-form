@@ -1,3 +1,4 @@
+/*
 .devmy-pdf-download {
     display: inline-flex;
     align-items: center;
@@ -15,7 +16,7 @@
 .devmy-pdf-download:hover {
     opacity: 0.9;
 }
-
+*/
 .devmy-pdf-modal {
     position: fixed;
     inset: 0;
@@ -74,6 +75,7 @@
 }
 
 .devmy-pdf-submit {
+    text-transform: none;
     border: 0;
     border-radius: 8px;
     padding: 11px 16px;
