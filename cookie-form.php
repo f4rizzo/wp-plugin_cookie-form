@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Cookie Form Download Gate
  * Description: Blocca il primo download PDF con form (nome, email, azienda) e sblocca i successivi tramite cookie.
- * Version: 1.2.1
- * Author: DevMy
+ * Version: 1.3.0
+ * Author: Fabrizio @devmy
  * License: GPL2+
  */
 
@@ -14,6 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class Cookie_Form_PDF_Gate {
     const NONCE_ACTION = 'cookie_form_pdf_gate';
     const COOKIE_NAME  = 'cookie_form_pdf_gate_unlocked';
+    const LEAD_TOKEN   = 'cookie_form_pdf_gate_lead_token';
 
     public function __construct() {
         add_action( 'init', array( $this, 'register_lead_post_type' ) );
@@ -28,6 +29,10 @@ final class Cookie_Form_PDF_Gate {
         add_action( 'wp_ajax_nopriv_cookie_form_submit_pdf_gate', array( $this, 'handle_form_submission' ) );
         add_action( 'wp_ajax_devmy_submit_pdf_gate', array( $this, 'handle_form_submission' ) );
         add_action( 'wp_ajax_nopriv_devmy_submit_pdf_gate', array( $this, 'handle_form_submission' ) );
+        add_action( 'wp_ajax_cookie_form_track_pdf_download', array( $this, 'handle_download_tracking' ) );
+        add_action( 'wp_ajax_nopriv_cookie_form_track_pdf_download', array( $this, 'handle_download_tracking' ) );
+        add_action( 'wp_ajax_devmy_track_pdf_download', array( $this, 'handle_download_tracking' ) );
+        add_action( 'wp_ajax_nopriv_devmy_track_pdf_download', array( $this, 'handle_download_tracking' ) );
 
         if ( is_admin() ) {
             add_filter( 'manage_edit-cookie_form_lead_columns', array( $this, 'set_lead_columns' ) );
@@ -76,14 +81,14 @@ final class Cookie_Form_PDF_Gate {
             'cookie-form-pdf-gate',
             $base_url . 'assets/css/cookie-form.css',
             array(),
-            '1.2.1'
+            '1.3.0'
         );
 
         wp_register_script(
             'cookie-form-pdf-gate',
             $base_url . 'assets/js/cookie-form.js',
             array( 'jquery' ),
-            '1.2.1',
+            '1.3.0',
             true
         );
     }
@@ -125,20 +130,40 @@ final class Cookie_Form_PDF_Gate {
                 break;
 
             case 'requested_pdf':
-                $requested_pdf = get_post_meta( $post_id, 'requested_pdf', true );
-                if ( ! $requested_pdf ) {
+                $requested_pdf  = (string) get_post_meta( $post_id, 'requested_pdf', true );
+                $downloaded_pdfs = $this->get_pdf_list_from_meta( $post_id );
+                $download_events = $this->get_download_events_from_meta( $post_id );
+                $tracked_pdfs   = $this->get_tracked_pdf_list( $downloaded_pdfs, $download_events );
+                $primary_pdf    = $this->get_primary_pdf_for_lead( $post_id, $requested_pdf, $tracked_pdfs, $download_events );
+                $primary_key    = $this->get_pdf_key( $primary_pdf );
+
+                if ( ! $primary_pdf && empty( $tracked_pdfs ) ) {
                     echo '-';
                     break;
                 }
 
-                $path    = wp_parse_url( $requested_pdf, PHP_URL_PATH );
-                $pdfName = $path ? wp_basename( $path ) : $requested_pdf;
+                if ( $primary_pdf ) {
+                    echo $this->render_pdf_link( $primary_pdf ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                }
 
-                printf(
-                    '<a href="%1$s" target="_blank" rel="noopener noreferrer">%2$s</a>',
-                    esc_url( $requested_pdf ),
-                    esc_html( $pdfName )
-                );
+                $other_downloads = array();
+                foreach ( $tracked_pdfs as $pdf_url ) {
+                    if ( ! $pdf_url || $this->get_pdf_key( $pdf_url ) === $primary_key ) {
+                        continue;
+                    }
+                    $other_downloads[] = $pdf_url;
+                }
+
+                if ( ! empty( $other_downloads ) ) {
+                    echo '<br /><small>' . esc_html__( 'Altri download:', 'cookie-form' ) . ' ';
+                    foreach ( $other_downloads as $index => $pdf_url ) {
+                        if ( $index > 0 ) {
+                            echo ', ';
+                        }
+                        echo $this->render_pdf_link( $pdf_url ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                    }
+                    echo '</small>';
+                }
                 break;
         }
     }
@@ -222,7 +247,9 @@ final class Cookie_Form_PDF_Gate {
                 'Email',
                 'Azienda',
                 'Pagina origine',
-                'PDF richiesto',
+                'PDF principale',
+                'Altri PDF scaricati',
+                'Totale download',
                 'IP address',
                 'User agent',
                 'Data invio',
@@ -230,6 +257,26 @@ final class Cookie_Form_PDF_Gate {
         );
 
         foreach ( $leads as $lead_id ) {
+            $requested_pdf  = (string) get_post_meta( $lead_id, 'requested_pdf', true );
+            $downloaded     = $this->get_pdf_list_from_meta( $lead_id );
+            $events         = $this->get_download_events_from_meta( $lead_id );
+            $tracked_pdfs   = $this->get_tracked_pdf_list( $downloaded, $events );
+            $primary_pdf    = $this->get_primary_pdf_for_lead( $lead_id, $requested_pdf, $tracked_pdfs, $events );
+            $primary_key    = $this->get_pdf_key( $primary_pdf );
+            $other_download = array();
+
+            foreach ( $tracked_pdfs as $pdf_url ) {
+                if ( ! $pdf_url || $this->get_pdf_key( $pdf_url ) === $primary_key ) {
+                    continue;
+                }
+                $other_download[] = $pdf_url;
+            }
+
+            $total_downloads = count( $events );
+            if ( 0 === $total_downloads && ! empty( $tracked_pdfs ) ) {
+                $total_downloads = count( $tracked_pdfs );
+            }
+
             fputcsv(
                 $output,
                 array(
@@ -237,7 +284,9 @@ final class Cookie_Form_PDF_Gate {
                     (string) get_post_meta( $lead_id, 'email', true ),
                     (string) get_post_meta( $lead_id, 'company', true ),
                     (string) get_post_meta( $lead_id, 'source_url', true ),
-                    (string) get_post_meta( $lead_id, 'requested_pdf', true ),
+                    $primary_pdf,
+                    implode( ' | ', $other_download ),
+                    (string) $total_downloads,
                     (string) get_post_meta( $lead_id, 'ip_address', true ),
                     (string) get_post_meta( $lead_id, 'user_agent', true ),
                     (string) get_the_date( 'Y-m-d H:i:s', $lead_id ),
@@ -247,6 +296,260 @@ final class Cookie_Form_PDF_Gate {
 
         fclose( $output );
         exit;
+    }
+
+    private function get_download_events_from_meta( $lead_id ) {
+        $events = get_post_meta( $lead_id, 'download_events', true );
+        if ( ! is_array( $events ) ) {
+            return array();
+        }
+
+        $normalized = array();
+        foreach ( $events as $event ) {
+            if ( ! is_array( $event ) ) {
+                continue;
+            }
+
+            $pdf_url = isset( $event['pdf'] ) ? $this->normalize_pdf_url( $event['pdf'] ) : '';
+            $type    = isset( $event['type'] ) ? sanitize_key( (string) $event['type'] ) : '';
+
+            if ( ! $pdf_url ) {
+                continue;
+            }
+
+            $normalized[] = array(
+                'pdf'        => $pdf_url,
+                'source'     => isset( $event['source'] ) ? esc_url_raw( (string) $event['source'] ) : '',
+                'type'       => $type ? $type : 'followup',
+                'tracked_at' => isset( $event['tracked_at'] ) ? sanitize_text_field( (string) $event['tracked_at'] ) : '',
+            );
+        }
+
+        return $normalized;
+    }
+
+    private function get_pdf_list_from_meta( $lead_id ) {
+        $pdfs = get_post_meta( $lead_id, 'downloaded_pdfs', true );
+        if ( ! is_array( $pdfs ) ) {
+            return array();
+        }
+
+        $clean = array();
+        $keys  = array();
+        foreach ( $pdfs as $pdf_url ) {
+            $url = $this->normalize_pdf_url( $pdf_url );
+            $key = $this->get_pdf_key( $url );
+            if ( ! $url || ! $key || in_array( $key, $keys, true ) ) {
+                continue;
+            }
+            $clean[] = $url;
+            $keys[]  = $key;
+        }
+
+        return $clean;
+    }
+
+    private function get_tracked_pdf_list( $downloaded_pdfs, $download_events ) {
+        $tracked = array();
+        $keys    = array();
+
+        if ( is_array( $downloaded_pdfs ) ) {
+            foreach ( $downloaded_pdfs as $pdf_url ) {
+                $url = $this->normalize_pdf_url( $pdf_url );
+                $key = $this->get_pdf_key( $url );
+                if ( ! $url || ! $key || in_array( $key, $keys, true ) ) {
+                    continue;
+                }
+                $tracked[] = $url;
+                $keys[]    = $key;
+            }
+        }
+
+        if ( is_array( $download_events ) ) {
+            foreach ( $download_events as $event ) {
+                if ( ! is_array( $event ) || empty( $event['pdf'] ) ) {
+                    continue;
+                }
+
+                $url = $this->normalize_pdf_url( $event['pdf'] );
+                $key = $this->get_pdf_key( $url );
+                if ( ! $url || ! $key || in_array( $key, $keys, true ) ) {
+                    continue;
+                }
+                $tracked[] = $url;
+                $keys[]    = $key;
+            }
+        }
+
+        return $tracked;
+    }
+
+    private function get_primary_pdf_for_lead( $lead_id, $requested_pdf = '', $tracked_pdfs = array(), $download_events = array() ) {
+        $requested_pdf = $this->normalize_pdf_url( $requested_pdf );
+        if ( $requested_pdf ) {
+            return $requested_pdf;
+        }
+
+        if ( empty( $download_events ) ) {
+            $download_events = $this->get_download_events_from_meta( $lead_id );
+        }
+
+        if ( is_array( $download_events ) ) {
+            foreach ( $download_events as $event ) {
+                if ( ! is_array( $event ) || empty( $event['pdf'] ) ) {
+                    continue;
+                }
+
+                $event_type = isset( $event['type'] ) ? sanitize_key( (string) $event['type'] ) : '';
+                if ( 'unlock' !== $event_type ) {
+                    continue;
+                }
+
+                $url = $this->normalize_pdf_url( $event['pdf'] );
+                if ( $url ) {
+                    return $url;
+                }
+            }
+
+            foreach ( $download_events as $event ) {
+                if ( ! is_array( $event ) || empty( $event['pdf'] ) ) {
+                    continue;
+                }
+
+                $url = $this->normalize_pdf_url( $event['pdf'] );
+                if ( $url ) {
+                    return $url;
+                }
+            }
+        }
+
+        if ( empty( $tracked_pdfs ) ) {
+            $tracked_pdfs = $this->get_pdf_list_from_meta( $lead_id );
+        }
+
+        if ( is_array( $tracked_pdfs ) ) {
+            foreach ( $tracked_pdfs as $pdf_url ) {
+                $url = $this->normalize_pdf_url( $pdf_url );
+                if ( $url ) {
+                    return $url;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function render_pdf_link( $pdf_url ) {
+        $path     = wp_parse_url( $pdf_url, PHP_URL_PATH );
+        $pdf_name = $path ? wp_basename( $path ) : $pdf_url;
+
+        return sprintf(
+            '<a href="%1$s" target="_blank" rel="noopener noreferrer">%2$s</a>',
+            esc_url( $pdf_url ),
+            esc_html( $pdf_name )
+        );
+    }
+
+    private function append_download_event( $lead_id, $requested_pdf, $source, $event_type ) {
+        $lead_id       = absint( $lead_id );
+        $requested_pdf = $this->normalize_pdf_url( $requested_pdf );
+        $source        = esc_url_raw( $source );
+        $event_type    = sanitize_key( $event_type );
+
+        if ( ! $lead_id || ! $requested_pdf ) {
+            return;
+        }
+
+        $events = get_post_meta( $lead_id, 'download_events', true );
+        if ( ! is_array( $events ) ) {
+            $events = array();
+        }
+
+        $events[] = array(
+            'pdf'        => $requested_pdf,
+            'source'     => $source,
+            'type'       => $event_type ? $event_type : 'followup',
+            'tracked_at' => wp_date( 'Y-m-d H:i:s' ),
+        );
+
+        update_post_meta( $lead_id, 'download_events', $events );
+
+        $downloaded_pdfs = $this->get_pdf_list_from_meta( $lead_id );
+        $requested_key = $this->get_pdf_key( $requested_pdf );
+        $exists        = false;
+
+        foreach ( $downloaded_pdfs as $existing_pdf ) {
+            if ( $this->get_pdf_key( $existing_pdf ) === $requested_key ) {
+                $exists = true;
+                break;
+            }
+        }
+
+        if ( ! $exists ) {
+            $downloaded_pdfs[] = $requested_pdf;
+            update_post_meta( $lead_id, 'downloaded_pdfs', $downloaded_pdfs );
+        }
+    }
+
+    private function normalize_pdf_url( $pdf_url ) {
+        $url = esc_url_raw( (string) $pdf_url );
+        if ( ! $url ) {
+            return '';
+        }
+
+        // Convert relative paths to absolute so comparisons remain stable.
+        if ( '/' === substr( $url, 0, 1 ) ) {
+            $url = home_url( $url );
+        }
+
+        return $url;
+    }
+
+    private function get_pdf_key( $pdf_url ) {
+        $url  = $this->normalize_pdf_url( $pdf_url );
+        $path = wp_parse_url( $url, PHP_URL_PATH );
+
+        if ( ! $path ) {
+            return '';
+        }
+
+        return ltrim( strtolower( rawurldecode( $path ) ), '/' );
+    }
+
+    private function create_lead_token( $lead_id ) {
+        $lead_id = absint( $lead_id );
+        if ( ! $lead_id ) {
+            return '';
+        }
+
+        $signature = hash_hmac( 'sha256', (string) $lead_id, wp_salt( 'auth' ) );
+        return base64_encode( $lead_id . ':' . $signature );
+    }
+
+    private function get_lead_id_from_token( $lead_token ) {
+        $decoded = base64_decode( (string) $lead_token, true );
+        if ( false === $decoded || false === strpos( $decoded, ':' ) ) {
+            return 0;
+        }
+
+        $parts = explode( ':', $decoded, 2 );
+        if ( 2 !== count( $parts ) ) {
+            return 0;
+        }
+
+        $lead_id   = absint( $parts[0] );
+        $signature = sanitize_text_field( $parts[1] );
+
+        if ( ! $lead_id || ! $signature ) {
+            return 0;
+        }
+
+        $expected = hash_hmac( 'sha256', (string) $lead_id, wp_salt( 'auth' ) );
+        if ( ! hash_equals( $expected, $signature ) ) {
+            return 0;
+        }
+
+        return $lead_id;
     }
 
     private function enqueue_assets() {
@@ -261,10 +564,54 @@ final class Cookie_Form_PDF_Gate {
                 'nonce'       => wp_create_nonce( self::NONCE_ACTION ),
                 'cookieName'  => self::COOKIE_NAME,
                 'cookieDays'  => 365,
+                'leadTokenKey' => self::LEAD_TOKEN,
+                'validation'  => array(
+                    'nameRequired'    => __( 'Inserisci il nome.', 'cookie-form' ),
+                    'emailRequired'   => __( 'Inserisci l\'email.', 'cookie-form' ),
+                    'emailInvalid'    => __( 'Inserisci un indirizzo email valido.', 'cookie-form' ),
+                    'companyRequired' => __( 'Inserisci il nome dell\'azienda.', 'cookie-form' ),
+                    'pdfRequired'     => __( 'Non riesco a capire quale PDF scaricare. Chiudi il popup e riprova dal pulsante download.', 'cookie-form' ),
+                    'nonceError'      => __( 'Sessione scaduta. Ricarica la pagina e riprova.', 'cookie-form' ),
+                    'genericError'    => __( 'Si e verificato un errore. Riprova.', 'cookie-form' ),
+                ),
                 'errorText'   => __( 'Si e verificato un errore. Riprova.', 'cookie-form' ),
                 'successText' => __( 'Grazie! Download sbloccato.', 'cookie-form' ),
             )
         );
+    }
+
+    private function validate_submission_fields( $name, $email, $company, $requested_pdf ) {
+        $field_errors = array();
+
+        if ( '' === $name ) {
+            $field_errors['name'] = __( 'Inserisci il nome.', 'cookie-form' );
+        }
+
+        if ( '' === $email ) {
+            $field_errors['email'] = __( 'Inserisci l\'email.', 'cookie-form' );
+        } elseif ( ! is_email( $email ) ) {
+            $field_errors['email'] = __( 'Inserisci un indirizzo email valido.', 'cookie-form' );
+        }
+
+        if ( '' === $company ) {
+            $field_errors['company'] = __( 'Inserisci il nome dell\'azienda.', 'cookie-form' );
+        }
+
+        if ( '' === $requested_pdf ) {
+            $field_errors['requested_pdf'] = __( 'Non riesco a capire quale PDF scaricare. Chiudi il popup e riprova dal pulsante download.', 'cookie-form' );
+        }
+
+        return $field_errors;
+    }
+
+    private function get_first_field_error_message( $field_errors ) {
+        foreach ( array( 'name', 'email', 'company', 'requested_pdf' ) as $field_name ) {
+            if ( isset( $field_errors[ $field_name ] ) && is_string( $field_errors[ $field_name ] ) ) {
+                return $field_errors[ $field_name ];
+            }
+        }
+
+        return __( 'Compila correttamente i campi richiesti.', 'cookie-form' );
     }
 
     public function render_pdf_button_shortcode( $atts ) {
@@ -349,22 +696,35 @@ final class Cookie_Form_PDF_Gate {
     }
 
     public function handle_form_submission() {
-        check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+        if ( false === check_ajax_referer( self::NONCE_ACTION, 'nonce', false ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Sessione scaduta. Ricarica la pagina e riprova.', 'cookie-form' ),
+                    'code'    => 'invalid_nonce',
+                ),
+                403
+            );
+        }
 
-        $name        = isset( $_POST['name'] ) ? sanitize_text_field( wp_unslash( $_POST['name'] ) ) : '';
-        $email       = isset( $_POST['email'] ) ? sanitize_email( wp_unslash( $_POST['email'] ) ) : '';
-        $company     = isset( $_POST['company'] ) ? sanitize_text_field( wp_unslash( $_POST['company'] ) ) : '';
+        $name        = isset( $_POST['name'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['name'] ) ) ) : '';
+        $email       = isset( $_POST['email'] ) ? trim( sanitize_email( wp_unslash( $_POST['email'] ) ) ) : '';
+        $company     = isset( $_POST['company'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['company'] ) ) ) : '';
         $source      = isset( $_POST['source'] ) ? esc_url_raw( wp_unslash( $_POST['source'] ) ) : '';
         $requested   = isset( $_POST['requested_pdf'] ) ? esc_url_raw( wp_unslash( $_POST['requested_pdf'] ) ) : '';
         $ip_address  = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
         $user_agent  = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
 
-        if ( empty( $name ) || empty( $email ) || empty( $company ) ) {
-            wp_send_json_error( array( 'message' => __( 'Compila tutti i campi obbligatori.', 'cookie-form' ) ), 400 );
-        }
-
-        if ( ! is_email( $email ) ) {
-            wp_send_json_error( array( 'message' => __( 'Inserisci un indirizzo email valido.', 'cookie-form' ) ), 400 );
+        $field_errors = $this->validate_submission_fields( $name, $email, $company, $requested );
+        if ( ! empty( $field_errors ) ) {
+            wp_send_json_error(
+                array(
+                    'message'     => $this->get_first_field_error_message( $field_errors ),
+                    'fieldErrors' => $field_errors,
+                    'field_errors'=> $field_errors,
+                    'code'        => 'validation_error',
+                ),
+                400
+            );
         }
 
         $post_id = wp_insert_post(
@@ -387,6 +747,7 @@ final class Cookie_Form_PDF_Gate {
         update_post_meta( $post_id, 'requested_pdf', $requested );
         update_post_meta( $post_id, 'ip_address', $ip_address );
         update_post_meta( $post_id, 'user_agent', $user_agent );
+        $this->append_download_event( $post_id, $requested, $source, 'unlock' );
 
         $cookie_expire = time() + ( DAY_IN_SECONDS * 365 );
         setcookie( self::COOKIE_NAME, '1', $cookie_expire, COOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
@@ -395,7 +756,41 @@ final class Cookie_Form_PDF_Gate {
             setcookie( self::COOKIE_NAME, '1', $cookie_expire, SITECOOKIEPATH, COOKIE_DOMAIN, is_ssl(), true );
         }
 
-        wp_send_json_success( array( 'message' => __( 'Lead salvato e download sbloccato.', 'cookie-form' ) ) );
+        wp_send_json_success(
+            array(
+                'message'   => __( 'Lead salvato e download sbloccato.', 'cookie-form' ),
+                'leadToken' => $this->create_lead_token( $post_id ),
+            )
+        );
+    }
+
+    public function handle_download_tracking() {
+        if ( false === check_ajax_referer( self::NONCE_ACTION, 'nonce', false ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Sessione scaduta. Ricarica la pagina e riprova.', 'cookie-form' ),
+                    'code'    => 'invalid_nonce',
+                ),
+                403
+            );
+        }
+
+        $lead_token  = isset( $_POST['lead_token'] ) ? sanitize_text_field( wp_unslash( $_POST['lead_token'] ) ) : '';
+        $requested   = isset( $_POST['requested_pdf'] ) ? esc_url_raw( wp_unslash( $_POST['requested_pdf'] ) ) : '';
+        $source      = isset( $_POST['source'] ) ? esc_url_raw( wp_unslash( $_POST['source'] ) ) : '';
+        $lead_id     = $this->get_lead_id_from_token( $lead_token );
+
+        if ( ! $lead_id || 'cookie_form_lead' !== get_post_type( $lead_id ) ) {
+            wp_send_json_error( array( 'message' => __( 'Lead non valido.', 'cookie-form' ) ), 400 );
+        }
+
+        if ( ! $requested ) {
+            wp_send_json_error( array( 'message' => __( 'PDF non valido.', 'cookie-form' ) ), 400 );
+        }
+
+        $this->append_download_event( $lead_id, $requested, $source, 'followup' );
+
+        wp_send_json_success( array( 'message' => __( 'Download tracciato.', 'cookie-form' ) ) );
     }
 }
 

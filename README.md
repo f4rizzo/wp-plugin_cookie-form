@@ -3,12 +3,13 @@
 Plugin WordPress per bloccare il primo download PDF con un form (Nome, Email, Azienda) e sbloccare i download successivi tramite cookie + localStorage.
 
 ## Stato documentazione
-Documentazione aggiornata e allineata alla versione plugin `1.2.1`.
+Documentazione aggiornata e allineata alla versione plugin `1.3.0`.
 
 ## Panoramica rapida
 - Primo click su CTA PDF: form obbligatorio.
 - Submit valido: lead salvato e download avviato.
 - Click successivi: download diretto (utente sbloccato per 365 giorni).
+- Tracciamento file: PDF principale (unlock) + altri PDF scaricati dallo stesso utente.
 - Lead archiviati come post privati `cookie_form_lead` + export CSV da admin.
 
 ## Quando usare "Nativo" vs "Elementor"
@@ -74,7 +75,9 @@ Per ogni submit viene creato un post privato `cookie_form_lead` con:
 - `email`
 - `company`
 - `source_url`
-- `requested_pdf`
+- `requested_pdf` (PDF principale che sblocca il form)
+- `downloaded_pdfs` (lista PDF scaricati dal lead)
+- `download_events` (storico eventi download con data/ora)
 - `ip_address`
 - `user_agent`
 
@@ -94,6 +97,7 @@ Backoffice:
 Restano supportati:
 - shortcode `[devmy_pdf_button]` e `[devmy_pdf_gate_form]`
 - action AJAX `devmy_submit_pdf_gate`
+- action AJAX `devmy_track_pdf_download`
 - attributi frontend `data-devmy-*`
 
 ## File principali

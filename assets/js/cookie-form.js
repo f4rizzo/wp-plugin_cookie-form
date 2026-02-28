@@ -4,6 +4,8 @@
     var config = window.cookieFormPdfGate || window.devmyPdfGate || {};
     var cookieName = config.cookieName || 'cookie_form_pdf_gate_unlocked';
     var cookieDays = parseInt(config.cookieDays || 365, 10);
+    var leadTokenKey = config.leadTokenKey || (cookieName + '_lead_token');
+    var validationConfig = config.validation || {};
     var pendingDownload = null;
 
     function readData($element, key) {
@@ -26,6 +28,18 @@
         return false;
     }
 
+    function readCookieValue(name) {
+        var cookies = document.cookie ? document.cookie.split(';') : [];
+        for (var i = 0; i < cookies.length; i += 1) {
+            var cookie = cookies[i].trim();
+            if (cookie.indexOf(name + '=') === 0) {
+                return decodeURIComponent(cookie.substring(name.length + 1));
+            }
+        }
+
+        return '';
+    }
+
     function setUnlockedAccess() {
         var maxAge = cookieDays * 24 * 60 * 60;
         var secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
@@ -34,6 +48,108 @@
         if (window.localStorage) {
             localStorage.setItem(cookieName, '1');
         }
+    }
+
+    function getLeadToken() {
+        if (window.localStorage) {
+            var localToken = localStorage.getItem(leadTokenKey);
+            if (localToken) {
+                return localToken;
+            }
+        }
+
+        return readCookieValue(leadTokenKey);
+    }
+
+    function setLeadToken(token) {
+        if (!token) {
+            return;
+        }
+
+        var maxAge = cookieDays * 24 * 60 * 60;
+        var secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
+        document.cookie = leadTokenKey + '=' + encodeURIComponent(token) + '; path=/; max-age=' + maxAge + '; SameSite=Lax' + secureFlag;
+
+        if (window.localStorage) {
+            localStorage.setItem(leadTokenKey, token);
+        }
+    }
+
+    function trackUnlockedDownload(pdfUrl) {
+        var leadToken = getLeadToken();
+        var payload;
+
+        if (!pdfUrl || !leadToken || !config.ajaxUrl) {
+            return;
+        }
+
+        payload = {
+            action: 'cookie_form_track_pdf_download',
+            nonce: config.nonce || '',
+            lead_token: leadToken,
+            requested_pdf: pdfUrl,
+            source: window.location.href
+        };
+
+        if (navigator.sendBeacon && window.URLSearchParams) {
+            if (navigator.sendBeacon(config.ajaxUrl, new URLSearchParams(payload))) {
+                return;
+            }
+        }
+
+        $.post(config.ajaxUrl, payload);
+    }
+
+    function validationMessage(key, fallback) {
+        return validationConfig[key] || fallback;
+    }
+
+    function collectFieldErrors(payload) {
+        var errors = {};
+        var emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!payload.name) {
+            errors.name = validationMessage('nameRequired', 'Inserisci il nome.');
+        }
+
+        if (!payload.email) {
+            errors.email = validationMessage('emailRequired', 'Inserisci l\'email.');
+        } else if (!emailPattern.test(payload.email)) {
+            errors.email = validationMessage('emailInvalid', 'Inserisci un indirizzo email valido.');
+        }
+
+        if (!payload.company) {
+            errors.company = validationMessage('companyRequired', 'Inserisci il nome dell\'azienda.');
+        }
+
+        if (!payload.requested_pdf) {
+            errors.requested_pdf = validationMessage('pdfRequired', 'Non riesco a capire quale PDF scaricare. Chiudi il popup e riprova dal pulsante download.');
+        }
+
+        return errors;
+    }
+
+    function firstFieldError(fieldErrors) {
+        var order = ['name', 'email', 'company', 'requested_pdf'];
+        var i;
+
+        if (!fieldErrors || typeof fieldErrors !== 'object') {
+            return '';
+        }
+
+        for (i = 0; i < order.length; i += 1) {
+            if (fieldErrors[order[i]]) {
+                return fieldErrors[order[i]];
+            }
+        }
+
+        for (i in fieldErrors) {
+            if (Object.prototype.hasOwnProperty.call(fieldErrors, i) && fieldErrors[i]) {
+                return fieldErrors[i];
+            }
+        }
+
+        return '';
     }
 
     function triggerDownload(url, target) {
@@ -197,6 +313,7 @@
         var popupId = readData($container, 'popup-id') || readData($link, 'popup-id');
 
         if (hasUnlockedAccess()) {
+            trackUnlockedDownload(pdfUrl);
             return;
         }
 
@@ -226,29 +343,49 @@
 
         var $form = $(this);
         var $submit = $form.find('.devmy-pdf-submit');
+        var payload;
+        var fieldErrors;
 
         setMessage($form, '', false);
         $submit.prop('disabled', true);
 
-        var payload = {
+        payload = {
             action: 'cookie_form_submit_pdf_gate',
             nonce: config.nonce || '',
             name: $.trim($form.find('[name="name"]').val()),
             email: $.trim($form.find('[name="email"]').val()),
             company: $.trim($form.find('[name="company"]').val()),
             source: window.location.href,
-            requested_pdf: $.trim($form.find('[name="requested_pdf"]').val())
+            requested_pdf: $.trim($form.find('[name="requested_pdf"]').val()) || (pendingDownload && pendingDownload.url ? pendingDownload.url : '')
         };
+
+        fieldErrors = collectFieldErrors(payload);
+        if (firstFieldError(fieldErrors)) {
+            setMessage($form, firstFieldError(fieldErrors), true);
+            $submit.prop('disabled', false);
+            return;
+        }
 
         $.post(config.ajaxUrl || '', payload)
             .done(function (response) {
+                var errorData;
+                var errorMessage;
+
                 if (!response || !response.success) {
-                    var errorMessage = response && response.data && response.data.message ? response.data.message : config.errorText;
+                    errorData = response && response.data ? response.data : {};
+                    errorMessage = errorData.message || validationMessage('genericError', config.errorText || 'Errore durante l\'invio.');
+
+                    fieldErrors = errorData.fieldErrors || errorData.field_errors || null;
+                    if (firstFieldError(fieldErrors)) {
+                        errorMessage = firstFieldError(fieldErrors);
+                    }
+
                     setMessage($form, errorMessage, true);
                     return;
                 }
 
                 setUnlockedAccess();
+                setLeadToken(response && response.data ? response.data.leadToken : '');
                 closeModal();
                 closeElementorPopup((pendingDownload && pendingDownload.popupId) || detectPopupIdFromForm($form), $form);
                 closeVisibleElementorPopups();
@@ -260,8 +397,16 @@
                 pendingDownload = null;
                 setMessage($form, '', false);
             })
-            .fail(function () {
-                setMessage($form, config.errorText || 'Errore durante l\'invio.', true);
+            .fail(function (jqXHR) {
+                var errorMessage = validationMessage('genericError', config.errorText || 'Errore durante l\'invio.');
+
+                if (jqXHR && jqXHR.responseJSON && jqXHR.responseJSON.data && jqXHR.responseJSON.data.message) {
+                    errorMessage = jqXHR.responseJSON.data.message;
+                } else if (jqXHR && typeof jqXHR.responseText === 'string' && jqXHR.responseText.trim() === '-1') {
+                    errorMessage = validationMessage('nonceError', 'Sessione scaduta. Ricarica la pagina e riprova.');
+                }
+
+                setMessage($form, errorMessage, true);
             })
             .always(function () {
                 $submit.prop('disabled', false);
