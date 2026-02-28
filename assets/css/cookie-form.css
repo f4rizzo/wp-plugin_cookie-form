@@ -75,7 +75,7 @@
 }
 
 .devmy-pdf-submit {
-    text-transform: none;
+    text-transform: none !important;
     border: 0;
     border-radius: 8px;
     padding: 11px 16px;

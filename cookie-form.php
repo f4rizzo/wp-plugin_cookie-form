@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: cookie-form
+ * Plugin Name: Cookie Form Download Gate
  * Description: Blocca il primo download PDF con form (nome, email, azienda) e sblocca i successivi tramite cookie.
  * Version: 1.2.1
  * Author: DevMy
@@ -28,6 +28,13 @@ final class Cookie_Form_PDF_Gate {
         add_action( 'wp_ajax_nopriv_cookie_form_submit_pdf_gate', array( $this, 'handle_form_submission' ) );
         add_action( 'wp_ajax_devmy_submit_pdf_gate', array( $this, 'handle_form_submission' ) );
         add_action( 'wp_ajax_nopriv_devmy_submit_pdf_gate', array( $this, 'handle_form_submission' ) );
+
+        if ( is_admin() ) {
+            add_filter( 'manage_edit-cookie_form_lead_columns', array( $this, 'set_lead_columns' ) );
+            add_action( 'manage_cookie_form_lead_posts_custom_column', array( $this, 'render_lead_column' ), 10, 2 );
+            add_action( 'restrict_manage_posts', array( $this, 'render_export_button' ) );
+            add_action( 'admin_init', array( $this, 'maybe_export_csv' ) );
+        }
     }
 
     public static function activate() {
@@ -45,8 +52,8 @@ final class Cookie_Form_PDF_Gate {
             'cookie_form_lead',
             array(
                 'labels' => array(
-                    'name'          => __( 'Cookie Form Leads', 'cookie-form' ),
-                    'singular_name' => __( 'Cookie Form Lead', 'cookie-form' ),
+                    'name'          => __( 'eBook Leads', 'cookie-form' ),
+                    'singular_name' => __( 'eBook Lead', 'cookie-form' ),
                 ),
                 'public'              => false,
                 'show_ui'             => true,
@@ -79,6 +86,167 @@ final class Cookie_Form_PDF_Gate {
             '1.2.1',
             true
         );
+    }
+
+    public function set_lead_columns( $columns ) {
+        return array(
+            'cb'            => isset( $columns['cb'] ) ? $columns['cb'] : '<input type="checkbox" />',
+            'name'          => __( 'Nome', 'cookie-form' ),
+            'email'         => __( 'Email', 'cookie-form' ),
+            'company'       => __( 'Azienda', 'cookie-form' ),
+            'requested_pdf' => __( 'PDF richiesto', 'cookie-form' ),
+            'date'          => isset( $columns['date'] ) ? $columns['date'] : __( 'Date', 'cookie-form' ),
+        );
+    }
+
+    public function render_lead_column( $column, $post_id ) {
+        switch ( $column ) {
+            case 'name':
+                $name = get_post_meta( $post_id, 'name', true );
+                echo esc_html( $name ? $name : '-' );
+                break;
+
+            case 'email':
+                $email = get_post_meta( $post_id, 'email', true );
+                if ( $email && is_email( $email ) ) {
+                    printf(
+                        '<a href="%1$s">%2$s</a>',
+                        esc_url( 'mailto:' . sanitize_email( $email ) ),
+                        esc_html( $email )
+                    );
+                } else {
+                    echo esc_html( $email ? $email : '-' );
+                }
+                break;
+
+            case 'company':
+                $company = get_post_meta( $post_id, 'company', true );
+                echo esc_html( $company ? $company : '-' );
+                break;
+
+            case 'requested_pdf':
+                $requested_pdf = get_post_meta( $post_id, 'requested_pdf', true );
+                if ( ! $requested_pdf ) {
+                    echo '-';
+                    break;
+                }
+
+                $path    = wp_parse_url( $requested_pdf, PHP_URL_PATH );
+                $pdfName = $path ? wp_basename( $path ) : $requested_pdf;
+
+                printf(
+                    '<a href="%1$s" target="_blank" rel="noopener noreferrer">%2$s</a>',
+                    esc_url( $requested_pdf ),
+                    esc_html( $pdfName )
+                );
+                break;
+        }
+    }
+
+    public function render_export_button( $post_type ) {
+        if ( 'cookie_form_lead' !== $post_type ) {
+            return;
+        }
+
+        $export_url = wp_nonce_url(
+            add_query_arg(
+                array(
+                    'post_type'          => 'cookie_form_lead',
+                    'cookie_form_export' => 'csv',
+                ),
+                admin_url( 'edit.php' )
+            ),
+            'cookie_form_export_csv',
+            'cookie_form_export_nonce'
+        );
+
+        printf(
+            '<a href="%1$s" class="button button-secondary" style="margin-left:8px;">%2$s</a>',
+            esc_url( $export_url ),
+            esc_html__( 'Esporta CSV', 'cookie-form' )
+        );
+    }
+
+    public function maybe_export_csv() {
+        if ( ! is_admin() ) {
+            return;
+        }
+
+        $post_type = isset( $_GET['post_type'] ) ? sanitize_key( wp_unslash( $_GET['post_type'] ) ) : '';
+        $format    = isset( $_GET['cookie_form_export'] ) ? sanitize_key( wp_unslash( $_GET['cookie_form_export'] ) ) : '';
+
+        if ( 'cookie_form_lead' !== $post_type || 'csv' !== $format ) {
+            return;
+        }
+
+        if ( ! current_user_can( 'edit_posts' ) ) {
+            wp_die( esc_html__( 'Non hai i permessi per esportare i lead.', 'cookie-form' ) );
+        }
+
+        check_admin_referer( 'cookie_form_export_csv', 'cookie_form_export_nonce' );
+
+        $leads = get_posts(
+            array(
+                'post_type'              => 'cookie_form_lead',
+                'post_status'            => array( 'private' ),
+                'posts_per_page'         => -1,
+                'orderby'                => 'date',
+                'order'                  => 'DESC',
+                'fields'                 => 'ids',
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+            )
+        );
+
+        $filename = sprintf( 'cookie-form-leads-%s.csv', wp_date( 'Y-m-d-His' ) );
+
+        nocache_headers();
+        header( 'Content-Type: text/csv; charset=utf-8' );
+        header( 'Content-Disposition: attachment; filename=' . $filename );
+        header( 'Pragma: no-cache' );
+        header( 'Expires: 0' );
+
+        $output = fopen( 'php://output', 'w' );
+        if ( false === $output ) {
+            wp_die( esc_html__( 'Impossibile generare il file CSV.', 'cookie-form' ) );
+        }
+
+        // UTF-8 BOM for Excel compatibility.
+        fwrite( $output, "\xEF\xBB\xBF" );
+
+        fputcsv(
+            $output,
+            array(
+                'Nome',
+                'Email',
+                'Azienda',
+                'Pagina origine',
+                'PDF richiesto',
+                'IP address',
+                'User agent',
+                'Data invio',
+            )
+        );
+
+        foreach ( $leads as $lead_id ) {
+            fputcsv(
+                $output,
+                array(
+                    (string) get_post_meta( $lead_id, 'name', true ),
+                    (string) get_post_meta( $lead_id, 'email', true ),
+                    (string) get_post_meta( $lead_id, 'company', true ),
+                    (string) get_post_meta( $lead_id, 'source_url', true ),
+                    (string) get_post_meta( $lead_id, 'requested_pdf', true ),
+                    (string) get_post_meta( $lead_id, 'ip_address', true ),
+                    (string) get_post_meta( $lead_id, 'user_agent', true ),
+                    (string) get_the_date( 'Y-m-d H:i:s', $lead_id ),
+                )
+            );
+        }
+
+        fclose( $output );
+        exit;
     }
 
     private function enqueue_assets() {
