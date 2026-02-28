@@ -3,7 +3,7 @@
 Plugin WordPress per bloccare il primo download PDF con un form (Nome, Email, Azienda) e sbloccare i download successivi tramite cookie + localStorage.
 
 ## Stato documentazione
-Documentazione aggiornata e allineata alla versione plugin `1.3.0`.
+Documentazione aggiornata e allineata alla versione plugin `1.3.1`.
 
 ## Panoramica rapida
 - Primo click su CTA PDF: form obbligatorio.
@@ -74,6 +74,8 @@ Per ogni submit viene creato un post privato `cookie_form_lead` con:
 - `name`
 - `email`
 - `company`
+- `data_storage_consent` (consenso esplicito all'archiviazione dati)
+- `data_storage_consent_at` (data/ora del consenso)
 - `source_url`
 - `requested_pdf` (PDF principale che sblocca il form)
 - `downloaded_pdfs` (lista PDF scaricati dal lead)
@@ -84,6 +86,7 @@ Per ogni submit viene creato un post privato `cookie_form_lead` con:
 Backoffice:
 - menu admin lead: **eBook Leads**
 - export CSV: pulsante **Esporta CSV** nella lista lead
+- export GDPR (Strumenti > Esporta dati personali): include anche stato e data del consenso
 
 ## Sicurezza e persistenza
 - Nonce AJAX: `check_ajax_referer`.

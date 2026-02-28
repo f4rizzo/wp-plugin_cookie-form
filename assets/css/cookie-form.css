@@ -74,6 +74,24 @@
     font-size: 14px;
 }
 
+.devmy-pdf-checkbox {
+    display: flex !important;
+    align-items: flex-start;
+    gap: 10px !important;
+    font-size: 13px !important;
+    line-height: 1.4;
+}
+
+.devmy-pdf-checkbox input[type="checkbox"] {
+    width: auto;
+    margin-top: 2px;
+    padding: 0;
+}
+
+.devmy-pdf-checkbox span {
+    display: block;
+}
+
 .devmy-pdf-submit {
     text-transform: none !important;
     border: 0;

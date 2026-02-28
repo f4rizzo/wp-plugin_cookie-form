@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Cookie Form Download Gate
  * Description: Blocca il primo download PDF con form (nome, email, azienda) e sblocca i successivi tramite cookie.
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: Fabrizio @devmy
  * License: GPL2+
  */
@@ -19,6 +19,7 @@ final class Cookie_Form_PDF_Gate {
     public function __construct() {
         add_action( 'init', array( $this, 'register_lead_post_type' ) );
         add_action( 'wp_enqueue_scripts', array( $this, 'register_assets' ) );
+        add_filter( 'wp_privacy_personal_data_exporters', array( $this, 'register_personal_data_exporter' ) );
 
         add_shortcode( 'cookie_form_pdf_button', array( $this, 'render_pdf_button_shortcode' ) );
         add_shortcode( 'devmy_pdf_button', array( $this, 'render_pdf_button_shortcode' ) );
@@ -81,14 +82,14 @@ final class Cookie_Form_PDF_Gate {
             'cookie-form-pdf-gate',
             $base_url . 'assets/css/cookie-form.css',
             array(),
-            '1.3.0'
+            '1.3.1'
         );
 
         wp_register_script(
             'cookie-form-pdf-gate',
             $base_url . 'assets/js/cookie-form.js',
             array( 'jquery' ),
-            '1.3.0',
+            '1.3.1',
             true
         );
     }
@@ -99,6 +100,7 @@ final class Cookie_Form_PDF_Gate {
             'name'          => __( 'Nome', 'cookie-form' ),
             'email'         => __( 'Email', 'cookie-form' ),
             'company'       => __( 'Azienda', 'cookie-form' ),
+            'data_storage_consent' => __( 'Consenso archiviazione', 'cookie-form' ),
             'requested_pdf' => __( 'PDF richiesto', 'cookie-form' ),
             'date'          => isset( $columns['date'] ) ? $columns['date'] : __( 'Date', 'cookie-form' ),
         );
@@ -127,6 +129,15 @@ final class Cookie_Form_PDF_Gate {
             case 'company':
                 $company = get_post_meta( $post_id, 'company', true );
                 echo esc_html( $company ? $company : '-' );
+                break;
+
+            case 'data_storage_consent':
+                $consent_label = $this->get_data_storage_consent_label( $post_id );
+                $consent_at    = $this->get_data_storage_consent_timestamp( $post_id );
+                echo esc_html( $consent_label );
+                if ( $consent_at ) {
+                    echo '<br /><small>' . esc_html( $consent_at ) . '</small>';
+                }
                 break;
 
             case 'requested_pdf':
@@ -252,6 +263,8 @@ final class Cookie_Form_PDF_Gate {
                 'Totale download',
                 'IP address',
                 'User agent',
+                'Consenso archiviazione dati',
+                'Data consenso archiviazione',
                 'Data invio',
             )
         );
@@ -289,6 +302,8 @@ final class Cookie_Form_PDF_Gate {
                     (string) $total_downloads,
                     (string) get_post_meta( $lead_id, 'ip_address', true ),
                     (string) get_post_meta( $lead_id, 'user_agent', true ),
+                    $this->get_data_storage_consent_label( $lead_id ),
+                    $this->get_data_storage_consent_timestamp( $lead_id ),
                     (string) get_the_date( 'Y-m-d H:i:s', $lead_id ),
                 )
             );
@@ -296,6 +311,132 @@ final class Cookie_Form_PDF_Gate {
 
         fclose( $output );
         exit;
+    }
+
+    public function register_personal_data_exporter( $exporters ) {
+        $exporters['cookie-form-leads'] = array(
+            'exporter_friendly_name' => __( 'Cookie Form Leads', 'cookie-form' ),
+            'callback'               => array( $this, 'export_personal_data' ),
+        );
+
+        return $exporters;
+    }
+
+    public function export_personal_data( $email_address, $page = 1 ) {
+        unset( $page );
+
+        $email_address = sanitize_email( $email_address );
+        if ( ! $email_address ) {
+            return array(
+                'data' => array(),
+                'done' => true,
+            );
+        }
+
+        $lead_ids = get_posts(
+            array(
+                'post_type'              => 'cookie_form_lead',
+                'post_status'            => array( 'private' ),
+                'posts_per_page'         => -1,
+                'orderby'                => 'date',
+                'order'                  => 'DESC',
+                'fields'                 => 'ids',
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+            )
+        );
+
+        $target_email = strtolower( $email_address );
+        $export_items = array();
+
+        foreach ( $lead_ids as $lead_id ) {
+            $lead_email = sanitize_email( (string) get_post_meta( $lead_id, 'email', true ) );
+            if ( strtolower( $lead_email ) !== $target_email ) {
+                continue;
+            }
+
+            $requested_pdf  = (string) get_post_meta( $lead_id, 'requested_pdf', true );
+            $downloaded     = $this->get_pdf_list_from_meta( $lead_id );
+            $events         = $this->get_download_events_from_meta( $lead_id );
+            $tracked_pdfs   = $this->get_tracked_pdf_list( $downloaded, $events );
+            $primary_pdf    = $this->get_primary_pdf_for_lead( $lead_id, $requested_pdf, $tracked_pdfs, $events );
+            $primary_key    = $this->get_pdf_key( $primary_pdf );
+            $other_download = array();
+
+            foreach ( $tracked_pdfs as $pdf_url ) {
+                if ( ! $pdf_url || $this->get_pdf_key( $pdf_url ) === $primary_key ) {
+                    continue;
+                }
+                $other_download[] = $pdf_url;
+            }
+
+            $total_downloads = count( $events );
+            if ( 0 === $total_downloads && ! empty( $tracked_pdfs ) ) {
+                $total_downloads = count( $tracked_pdfs );
+            }
+
+            $export_items[] = array(
+                'group_id'    => 'cookie-form-leads',
+                'group_label' => __( 'Cookie Form Leads', 'cookie-form' ),
+                'item_id'     => 'cookie-form-lead-' . $lead_id,
+                'data'        => array(
+                    array(
+                        'name'  => __( 'Nome', 'cookie-form' ),
+                        'value' => (string) get_post_meta( $lead_id, 'name', true ),
+                    ),
+                    array(
+                        'name'  => __( 'Email', 'cookie-form' ),
+                        'value' => $lead_email,
+                    ),
+                    array(
+                        'name'  => __( 'Azienda', 'cookie-form' ),
+                        'value' => (string) get_post_meta( $lead_id, 'company', true ),
+                    ),
+                    array(
+                        'name'  => __( 'Pagina origine', 'cookie-form' ),
+                        'value' => (string) get_post_meta( $lead_id, 'source_url', true ),
+                    ),
+                    array(
+                        'name'  => __( 'PDF principale', 'cookie-form' ),
+                        'value' => $primary_pdf,
+                    ),
+                    array(
+                        'name'  => __( 'Altri PDF scaricati', 'cookie-form' ),
+                        'value' => implode( ' | ', $other_download ),
+                    ),
+                    array(
+                        'name'  => __( 'Totale download', 'cookie-form' ),
+                        'value' => (string) $total_downloads,
+                    ),
+                    array(
+                        'name'  => __( 'IP address', 'cookie-form' ),
+                        'value' => (string) get_post_meta( $lead_id, 'ip_address', true ),
+                    ),
+                    array(
+                        'name'  => __( 'User agent', 'cookie-form' ),
+                        'value' => (string) get_post_meta( $lead_id, 'user_agent', true ),
+                    ),
+                    array(
+                        'name'  => __( 'Consenso archiviazione dati', 'cookie-form' ),
+                        'value' => $this->get_data_storage_consent_label( $lead_id ),
+                    ),
+                    array(
+                        'name'  => __( 'Data consenso archiviazione', 'cookie-form' ),
+                        'value' => $this->get_data_storage_consent_timestamp( $lead_id ),
+                    ),
+                    array(
+                        'name'  => __( 'Data invio', 'cookie-form' ),
+                        'value' => (string) get_the_date( 'Y-m-d H:i:s', $lead_id ),
+                    ),
+                ),
+            );
+        }
+
+        return array(
+            'data' => $export_items,
+            'done' => true,
+        );
     }
 
     private function get_download_events_from_meta( $lead_id ) {
@@ -570,6 +711,7 @@ final class Cookie_Form_PDF_Gate {
                     'emailRequired'   => __( 'Inserisci l\'email.', 'cookie-form' ),
                     'emailInvalid'    => __( 'Inserisci un indirizzo email valido.', 'cookie-form' ),
                     'companyRequired' => __( 'Inserisci il nome dell\'azienda.', 'cookie-form' ),
+                    'consentRequired' => __( 'Devi accettare l\'archiviazione dei dati per continuare.', 'cookie-form' ),
                     'pdfRequired'     => __( 'Non riesco a capire quale PDF scaricare. Chiudi il popup e riprova dal pulsante download.', 'cookie-form' ),
                     'nonceError'      => __( 'Sessione scaduta. Ricarica la pagina e riprova.', 'cookie-form' ),
                     'genericError'    => __( 'Si e verificato un errore. Riprova.', 'cookie-form' ),
@@ -580,7 +722,7 @@ final class Cookie_Form_PDF_Gate {
         );
     }
 
-    private function validate_submission_fields( $name, $email, $company, $requested_pdf ) {
+    private function validate_submission_fields( $name, $email, $company, $requested_pdf, $data_storage_consent ) {
         $field_errors = array();
 
         if ( '' === $name ) {
@@ -597,6 +739,10 @@ final class Cookie_Form_PDF_Gate {
             $field_errors['company'] = __( 'Inserisci il nome dell\'azienda.', 'cookie-form' );
         }
 
+        if ( ! $this->has_data_storage_consent( $data_storage_consent ) ) {
+            $field_errors['data_storage_consent'] = __( 'Devi accettare l\'archiviazione dei dati per continuare.', 'cookie-form' );
+        }
+
         if ( '' === $requested_pdf ) {
             $field_errors['requested_pdf'] = __( 'Non riesco a capire quale PDF scaricare. Chiudi il popup e riprova dal pulsante download.', 'cookie-form' );
         }
@@ -605,13 +751,40 @@ final class Cookie_Form_PDF_Gate {
     }
 
     private function get_first_field_error_message( $field_errors ) {
-        foreach ( array( 'name', 'email', 'company', 'requested_pdf' ) as $field_name ) {
+        foreach ( array( 'name', 'email', 'company', 'data_storage_consent', 'requested_pdf' ) as $field_name ) {
             if ( isset( $field_errors[ $field_name ] ) && is_string( $field_errors[ $field_name ] ) ) {
                 return $field_errors[ $field_name ];
             }
         }
 
         return __( 'Compila correttamente i campi richiesti.', 'cookie-form' );
+    }
+
+    private function has_data_storage_consent( $value ) {
+        if ( is_bool( $value ) ) {
+            return $value;
+        }
+
+        $normalized = strtolower( trim( (string) $value ) );
+        return in_array( $normalized, array( '1', 'true', 'yes', 'on' ), true );
+    }
+
+    private function get_data_storage_consent_label( $lead_id ) {
+        $consent_value = get_post_meta( $lead_id, 'data_storage_consent', true );
+        return $this->has_data_storage_consent( $consent_value ) ? __( 'Sì', 'cookie-form' ) : __( 'No', 'cookie-form' );
+    }
+
+    private function get_data_storage_consent_timestamp( $lead_id ) {
+        $consent_at = (string) get_post_meta( $lead_id, 'data_storage_consent_at', true );
+        if ( $consent_at ) {
+            return $consent_at;
+        }
+
+        if ( $this->has_data_storage_consent( get_post_meta( $lead_id, 'data_storage_consent', true ) ) ) {
+            return (string) get_the_date( 'Y-m-d H:i:s', $lead_id );
+        }
+
+        return '';
     }
 
     public function render_pdf_button_shortcode( $atts ) {
@@ -687,6 +860,10 @@ final class Cookie_Form_PDF_Gate {
                 <?php esc_html_e( 'Azienda', 'cookie-form' ); ?>
                 <input type="text" name="company" required />
             </label>
+            <label class="devmy-pdf-checkbox">
+                <input type="checkbox" name="data_storage_consent" value="1" required />
+                <span><?php esc_html_e( 'Accetto l\'archiviazione dei dati inviati tramite questo form.', 'cookie-form' ); ?></span>
+            </label>
             <button type="submit" class="devmy-pdf-submit"><?php esc_html_e( 'Invia e Scarica', 'cookie-form' ); ?></button>
             <p class="devmy-pdf-message" aria-live="polite"></p>
         </form>
@@ -709,12 +886,13 @@ final class Cookie_Form_PDF_Gate {
         $name        = isset( $_POST['name'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['name'] ) ) ) : '';
         $email       = isset( $_POST['email'] ) ? trim( sanitize_email( wp_unslash( $_POST['email'] ) ) ) : '';
         $company     = isset( $_POST['company'] ) ? trim( sanitize_text_field( wp_unslash( $_POST['company'] ) ) ) : '';
+        $data_storage_consent = isset( $_POST['data_storage_consent'] ) ? sanitize_text_field( wp_unslash( $_POST['data_storage_consent'] ) ) : '';
         $source      = isset( $_POST['source'] ) ? esc_url_raw( wp_unslash( $_POST['source'] ) ) : '';
         $requested   = isset( $_POST['requested_pdf'] ) ? esc_url_raw( wp_unslash( $_POST['requested_pdf'] ) ) : '';
         $ip_address  = isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) ) : '';
         $user_agent  = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
 
-        $field_errors = $this->validate_submission_fields( $name, $email, $company, $requested );
+        $field_errors = $this->validate_submission_fields( $name, $email, $company, $requested, $data_storage_consent );
         if ( ! empty( $field_errors ) ) {
             wp_send_json_error(
                 array(
@@ -740,6 +918,8 @@ final class Cookie_Form_PDF_Gate {
             wp_send_json_error( array( 'message' => __( 'Impossibile salvare il contatto. Riprova.', 'cookie-form' ) ), 500 );
         }
 
+        $consent_accepted = $this->has_data_storage_consent( $data_storage_consent );
+
         update_post_meta( $post_id, 'name', $name );
         update_post_meta( $post_id, 'email', $email );
         update_post_meta( $post_id, 'company', $company );
@@ -747,6 +927,10 @@ final class Cookie_Form_PDF_Gate {
         update_post_meta( $post_id, 'requested_pdf', $requested );
         update_post_meta( $post_id, 'ip_address', $ip_address );
         update_post_meta( $post_id, 'user_agent', $user_agent );
+        update_post_meta( $post_id, 'data_storage_consent', $consent_accepted ? '1' : '0' );
+        if ( $consent_accepted ) {
+            update_post_meta( $post_id, 'data_storage_consent_at', wp_date( 'Y-m-d H:i:s' ) );
+        }
         $this->append_download_event( $post_id, $requested, $source, 'unlock' );
 
         $cookie_expire = time() + ( DAY_IN_SECONDS * 365 );

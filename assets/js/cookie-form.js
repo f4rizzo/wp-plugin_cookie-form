@@ -122,6 +122,10 @@
             errors.company = validationMessage('companyRequired', 'Inserisci il nome dell\'azienda.');
         }
 
+        if (!payload.data_storage_consent) {
+            errors.data_storage_consent = validationMessage('consentRequired', 'Devi accettare l\'archiviazione dei dati per continuare.');
+        }
+
         if (!payload.requested_pdf) {
             errors.requested_pdf = validationMessage('pdfRequired', 'Non riesco a capire quale PDF scaricare. Chiudi il popup e riprova dal pulsante download.');
         }
@@ -130,7 +134,7 @@
     }
 
     function firstFieldError(fieldErrors) {
-        var order = ['name', 'email', 'company', 'requested_pdf'];
+        var order = ['name', 'email', 'company', 'data_storage_consent', 'requested_pdf'];
         var i;
 
         if (!fieldErrors || typeof fieldErrors !== 'object') {
@@ -355,6 +359,7 @@
             name: $.trim($form.find('[name="name"]').val()),
             email: $.trim($form.find('[name="email"]').val()),
             company: $.trim($form.find('[name="company"]').val()),
+            data_storage_consent: $form.find('[name="data_storage_consent"]').is(':checked') ? '1' : '',
             source: window.location.href,
             requested_pdf: $.trim($form.find('[name="requested_pdf"]').val()) || (pendingDownload && pendingDownload.url ? pendingDownload.url : '')
         };
