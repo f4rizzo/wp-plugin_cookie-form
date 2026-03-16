@@ -122,8 +122,12 @@
             errors.company = validationMessage('companyRequired', 'Inserisci il nome dell\'azienda.');
         }
 
+        if (!payload.privacy_ack) {
+            errors.privacy_ack = validationMessage('privacyRequired', 'Devi dichiarare di aver letto l\'informativa privacy per continuare.');
+        }
+
         if (!payload.data_storage_consent) {
-            errors.data_storage_consent = validationMessage('consentRequired', 'Devi accettare l\'archiviazione dei dati per continuare.');
+            errors.data_storage_consent = validationMessage('consentRequired', 'Devi prestare il consenso al trattamento dei dati per continuare.');
         }
 
         if (!payload.requested_pdf) {
@@ -134,7 +138,7 @@
     }
 
     function firstFieldError(fieldErrors) {
-        var order = ['name', 'email', 'company', 'data_storage_consent', 'requested_pdf'];
+        var order = ['name', 'email', 'company', 'privacy_ack', 'data_storage_consent', 'requested_pdf'];
         var i;
 
         if (!fieldErrors || typeof fieldErrors !== 'object') {
@@ -359,6 +363,7 @@
             name: $.trim($form.find('[name="name"]').val()),
             email: $.trim($form.find('[name="email"]').val()),
             company: $.trim($form.find('[name="company"]').val()),
+            privacy_ack: $form.find('[name="privacy_ack"]').is(':checked') ? '1' : '',
             data_storage_consent: $form.find('[name="data_storage_consent"]').is(':checked') ? '1' : '',
             source: window.location.href,
             requested_pdf: $.trim($form.find('[name="requested_pdf"]').val()) || (pendingDownload && pendingDownload.url ? pendingDownload.url : '')
